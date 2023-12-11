@@ -1,0 +1,99 @@
+Code (python) for virtual screening
+The code can be executed natively in bash or through the windows subsystem for Linux on a windows machine for versions of Vina that support the log function (previous 1.2.3)
+
+import os
+import time
+import subprocess
+import pandas as pd
+
+
+def gen_sys_calls(path):
+    calls = []
+    for x in os.listdir(path):
+        if x.endswith(".pdbqt") and x != "protein.pdbqt":
+            call = "vina --receptor protein.pdbqt --ligand %s --center_x XX --center_y XX --center_z XX --size_x 25 --size_y 25 --size_z 25 --exhaustiveness 8 --cpu 2 --out outfiles_models/%s_models.pdbqt --log outfiles/%s_vina_out" % (
+            path + x, x, x)
+            calls.append(call)
+    return calls
+
+#AutoDock Vina settings, 25 Angstrom search space with coordinates XX, with an exhaustiveness of 8, using 2 CPU per 1 job
+
+def job_submit(maxNumOfJobsSubmitted, sleepTime, jobFilePath, start_time, n_ligands, lig_Count):
+    """submit only when max jobs isn't exceeded"""
+    numberOfJobsSubmitted = int(subprocess.check_output("ps -A | grep vina | wc -l", shell=True).strip())
+    while numberOfJobsSubmitted >= maxNumOfJobsSubmitted:
+        time.sleep(sleepTime)
+        numberOfJobsSubmitted = int(subprocess.check_output("ps  -A | grep vina | wc -l", shell=True).strip())
+    
+    os.system(jobFilePath + " &")
+    
+    print('--- Ligand %s out of %s finished at: %s seconds ---' % (lig_Count, n_ligands, time.time() - start_time))
+    
+def check_run_ended(sleepTime):
+    current_jobs = int(subprocess.check_output("ps -A | grep vina | wc -l", shell=True).strip())
+    while current_jobs > 0:
+        time.sleep(sleepTime)
+        current_jobs = int(subprocess.check_output("ps  -A | grep vina | wc -l", shell=True).strip())
+
+def submitter(path, start_time, n_ligands):
+
+    #Check queue system every 5 seconds for completed processes and submit 2 jobs at the same time
+    lig_count = 1
+    for x in path:
+        job_submit(2, 5, x, start_time, n_ligands, lig_count)
+        print(x)
+        lig_count+=1 # ligand count
+       
+def format_output(run_directory):
+    
+    results_file = pd.read_csv(run_directory + "outfiles/results_file.csv", names=['Ligand', 'Binding_Affinity'])
+    results_file.sort_values(by=["Binding_Affinity"], inplace=True)
+    results_file.to_csv(run_directory + "outfiles/results_file.csv")
+
+def run(run_directory):
+    start_time = time.time()
+    n=1
+    n_ligands = len([name for name in os.listdir(run_directory) if name.endswith(".pdbqt") and name != "protein.pdbqt"])
+    calls = gen_sys_calls(run_directory)
+    submitter(calls, start_time, n_ligands)
+    check_run_ended(5)
+   
+run_directory = '/mnt/c/Users/user/Desktop/test_run/'
+dir2='/mnt/c/Users/user/Desktop/test_run/outfiles_models/'
+
+start_time2= time.time()    #Set a timer before the experiment starts
+
+run(run_directory)
+
+all_outputs = {}
+
+for filename in os.listdir((run_directory + "outfiles/")):
+    if filename.endswith("_vina_out"):
+        all_outputs[filename] = []
+        with open(run_directory + "outfiles/" + filename) as filey:
+            for line in filey:
+                if line.startswith("   1"):
+                    splice = line.split()
+                    all_outputs[filename].append(splice[1])
+
+end_time2=time.time() #Get the time at the end of the experiment
+final_time=end_time2-start_time2 #Get the difference of time
+
+print(all_outputs)
+
+print('--- Final Run Time: %s seconds ---' % final_time) #Print the time
+
+# Use to replace print when writing to a new file
+newf = open(run_directory + "outfiles/results_file.csv", "w")
+
+for k, v in all_outputs.items():
+    for affinity in v:
+        newf.write(k.replace(".pdbqt_vina_out", "") + "," + affinity + "\n")
+
+newf.close()
+
+format_output(run_directory)
+
+with open('outfiles/time.txt', 'w') as f:
+    f.write('Total time: '+str(final_time)+" seconds"+"\n")
+
